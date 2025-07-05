@@ -1,0 +1,73 @@
+No se encontraron proxies funcionales. Usando conexión directa.
+
+    AVISO LEGAL: S3Hunter-X está diseñado para uso ético en programas de Bug Bounty o auditorías autorizadas.
+    El uso no autorizado para escanear o explotar buckets S3 sin permiso es ilegal y no está respaldado.
+    
+INFO:S3Hunter-X:Logger configurado con idioma es
+INFO:S3Hunter-X:max_workers ajustado a 10
+Todas las dependencias están instaladas.
+Base de datos inicializada con WAL y índices
+Módulo core.bucket_generator cargado dinámicamente
+Módulo core.scanner cargado dinámicamente
+Módulo core.downloader cargado dinámicamente
+Módulo core.reporter cargado dinámicamente
+No se encontró el archivo de palabras: data/s3_wordlist.txt
+Generados 130962 nombres de buckets para uber.com
+Filtrados 130962 buckets autorizados
+Archivo data/buckets.txt generado con 130962 buckets
+INFO:S3Hunter-X:Filtrados 130962 buckets autorizados
+INFO:S3Hunter-X:Iniciando escaneo en lotes de 10000 buckets...
+INFO:S3Hunter-X:Escaneando lote 1 a 10000 de 130962
+/home/x/.pyenv/versions/3.12.3/lib/python3.12/asyncio/events.py:88: RuntimeWarning: The executor did not finishing joining its threads within 300 seconds.
+  self._context.run(self._callback, *self._args)
+Traceback (most recent call last):
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/app_env/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 189, in async_wrapped
+    return await copy(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/app_env/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 111, in __call__
+    do = await self.iter(retry_state=retry_state)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/app_env/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 153, in iter
+    result = await action(retry_state)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/app_env/lib/python3.12/site-packages/tenacity/_utils.py", line 99, in inner
+    return call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/app_env/lib/python3.12/site-packages/tenacity/__init__.py", line 400, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ^^^^^^^^^^^^^^^^^^^
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/app_env/lib/python3.12/site-packages/tenacity/asyncio/__init__.py", line 114, in __call__
+    result = await fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/main.py", line 267, in main
+    await asyncio.sleep(args.delay)
+                   ^^^^^^^^^^^^^^^^^
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/core/scanner.py", line 101, in scan_buckets_async
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/core/scanner.py", line 97, in scan_with_sem
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/asyncio/locks.py", line 14, in __aenter__
+    await self.acquire()
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/asyncio/locks.py", line 386, in acquire
+    await fut
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/x/Documents/Scrips/github/S3Hunter-X/main.py", line 359, in <module>
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/home/x/.pyenv/versions/3.12.3/lib/python3.12/asyncio/runners.py", line 123, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt
