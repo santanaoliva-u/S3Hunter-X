@@ -39,16 +39,16 @@ def load_wordlist(file_path: str) -> List[str]:
         logger.error(f"Error al leer el archivo de palabras: {e}")
         return []
 
-def generate_fuzzed_names(base_name: str, max_fuzz: int = 50) -> List[str]:
+def generate_fuzzed_names(base_name: str, max_fuzz: int = 100) -> List[str]:
     """Genera variaciones fuzzed de un nombre base."""
     fuzzed = [base_name]
-    for i in range(min(max_fuzz // 2, 25)):
+    for i in range(min(max_fuzz // 2, 50)):
         fuzzed.append(f"{base_name}-{i:03d}")
         fuzzed.append(f"{base_name}{i:03d}")
-    for _ in range(min(max_fuzz // 2, 25)):
-        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    for _ in range(min(max_fuzz // 2, 50)):
+        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
         fuzzed.append(f"{base_name}-{random_suffix}")
-    variations = ['v1', 'v2', 'v3', 'prod', 'dev', 'test', 'backup', 'old', 'new', 'temp']
+    variations = ['v1', 'v2', 'v3', 'prod', 'dev', 'test', 'backup', 'old', 'new', 'temp', 'staging', 'qa', 'sandbox']
     for var in variations:
         fuzzed.append(f"{base_name}-{var}")
         fuzzed.append(f"{var}-{base_name}")
@@ -58,17 +58,20 @@ def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdoma
     """Genera nombres de buckets con fuzzing avanzado."""
     prefixes = [
         'dev', 'prod', 'staging', 'backup', 'data', 'files', 'public', 'logs', 'test', 'api',
-        'app', 'config', 'archive', 'static', 'media', 'assets', 'qa', 'sandbox', 'temp'
+        'app', 'config', 'archive', 'static', 'media', 'assets', 'qa', 'sandbox', 'temp',
+        'www', 'cdn', 'upload', 'download', 'secure', 'internal', 'external', 'devops',
+        'storage', 'bucket', 's3', 'private', 'shared', 'legacy', 'demo', 'beta'
     ]
     suffixes = [
         'backup', 'data', 'files', 'logs', 'public', 'archive', 'config', 's3', 'storage',
-        'bucket', 'prod', 'dev', 'test', 'staging', 'private'
+        'bucket', 'prod', 'dev', 'test', 'staging', 'private', 'assets', 'media', 'temp',
+        'v1', 'v2', 'old', 'new', 'qa', 'sandbox', 'internal', 'external', 'secure'
     ]
     
     if wordlist_file:
         extra_words = load_wordlist(wordlist_file)
-        prefixes.extend(extra_words[:50])  # Limitar para mejorar rendimiento
-        suffixes.extend(extra_words[:50])
+        prefixes.extend(extra_words[:100])  # Aumentar para más combinaciones
+        suffixes.extend(extra_words[:100])
     
     subdomains = resolve_subdomains(target_domain)
     if subdomains_file and os.path.exists(subdomains_file):
@@ -83,21 +86,26 @@ def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdoma
             f"s3-{domain_clean}",
             f"{domain_clean}-s3",
             f"{domain_clean}-public",
-            f"{domain_clean}-private"
+            f"{domain_clean}-private",
+            f"{domain_clean}-data",
+            f"{domain_clean}-backup",
+            f"{domain_clean}-prod",
+            f"{domain_clean}-dev",
+            f"{domain_clean}-test"
         ]
         buckets.update(high_priority)
-        for prefix in prefixes[:20]:  # Limitar para priorizar
+        for prefix in prefixes:
             buckets.add(f"{prefix}-{domain_clean}")
-        for suffix in suffixes[:20]:
+        for suffix in suffixes:
             buckets.add(f"{domain_clean}-{suffix}")
-        for prefix, suffix in itertools.product(prefixes[:20], suffixes[:20]):
+        for prefix, suffix in itertools.product(prefixes, suffixes):
             buckets.add(f"{prefix}-{domain_clean}-{suffix}")
         for base_name in high_priority:
-            buckets.update(generate_fuzzed_names(base_name, max_fuzz=20))  # Reducir fuzzing
+            buckets.update(generate_fuzzed_names(base_name, max_fuzz=100))
     
     valid_buckets = [b for b in buckets if is_valid_s3_bucket_name(b)]
     if max_buckets:
-        valid_buckets = sorted(valid_buckets, key=lambda x: any(kw in x for kw in ['prod', 'backup', 'data', 'public', 's3']), reverse=True)[:max_buckets]
+        valid_buckets = sorted(valid_buckets, key=lambda x: any(kw in x for kw in ['prod', 'backup', 'data', 'public', 's3', 'dev', 'test']), reverse=True)[:max_buckets]
     
     logger.info(f"Generados {len(valid_buckets)} nombres de buckets para {target_domain}")
     return valid_buckets

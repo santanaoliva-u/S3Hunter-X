@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 def init_db(db_path: str) -> None:
-    """Inicializa la base de datos con índices optimizados y verifica la columna 'url'."""
+    """Inicializa la base de datos con índices optimizados y verifica las columnas 'url' y 'region'."""
     try:
         with sqlite3.connect(db_path, check_same_thread=False) as conn:
             c = conn.cursor()
@@ -72,6 +72,9 @@ def init_db(db_path: str) -> None:
             if 'url' not in columns:
                 c.execute("ALTER TABLE results ADD COLUMN url TEXT")
                 logging.getLogger('S3Hunter-X').info("Columna 'url' añadida a la tabla 'results'")
+            if 'region' not in columns:
+                c.execute("ALTER TABLE results ADD COLUMN region TEXT")
+                logging.getLogger('S3Hunter-X').info("Columna 'region' añadida a la tabla 'results'")
             c.execute('''CREATE TABLE IF NOT EXISTS scanned_buckets (
                 bucket TEXT PRIMARY KEY,
                 status TEXT,
@@ -120,7 +123,6 @@ async def main() -> None:
     args = parse_args()
     logger = setup_logger(log_level=args.log_level)
     
-    # Validar configuración de Telegram (opcional)
     telegram_enabled = False
     if args.telegram_token and args.telegram_chat_id:
         if not re.match(r'^\d+:[A-Za-z0-9_-]+$', args.telegram_token):
@@ -130,6 +132,13 @@ async def main() -> None:
         else:
             telegram_enabled = True
             logger.info("Configuración de Telegram validada")
+            # Enviar notificación de prueba
+            logger.debug("Enviando notificación de prueba a Telegram")
+            await send_telegram_notification(
+                "🚀 S3Hunter-X iniciado para el dominio: " + args.target_domain,
+                args.telegram_token,
+                args.telegram_chat_id
+            )
     else:
         logger.info("Notificaciones de Telegram no configuradas")
     
@@ -161,7 +170,6 @@ async def main() -> None:
             logger.error("No se pudieron cargar todos los módulos necesarios")
             sys.exit(1)
         
-        # Generar buckets
         buckets_list: List[str] = []
         success = bucket_generator.generate_buckets_file(
             target_domain=args.target_domain,
@@ -186,13 +194,11 @@ async def main() -> None:
             sys.exit(1)
         logger.info(f"Filtrados {len(buckets_list)} buckets autorizados")
         
-        # Configurar manejador de señales
         loop = asyncio.get_running_loop()
         session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=args.max_workers))
         db_conn = sqlite3.connect(settings.SETTINGS['database'], check_same_thread=False)
         signal.signal(signal.SIGINT, lambda s, f: handle_shutdown(loop, session, db_conn))
         
-        # Escanear buckets
         try:
             for i in range(0, len(buckets_list), args.batch_size):
                 batch = buckets_list[i:i + args.batch_size]
@@ -266,6 +272,8 @@ async def main() -> None:
                 print(tabulate(table, headers=["Bucket", "Estado", "Región", "Timestamp"], tablefmt="grid"))
             
             logger.info(f"¡Proceso completado! Revisa los reportes en {args.output}.*")
+            if public_buckets_found == 0:
+                logger.warning("No se encontraron buckets públicos. Considera usar un dominio diferente o aumentar el número de buckets generados.")
         
         except asyncio.CancelledError:
             logger.info("Tareas canceladas debido a interrupción")
