@@ -637,3 +637,8 @@ MIT License. Consulta `LICENSE` para más detalles.
 - **Manual y README**: Ambos están optimizados para claridad y profesionalismo. El `manual.md` es detallado para usuarios técnicos, mientras que el `README.md` es conciso y atractivo para GitHub.
 
 Si necesitas ayuda adicional para implementar, probar, o subir el proyecto a GitHub, ¡dímelo y lo hacemos juntos! 🚀
+
+
+
+
+python main.py --target-domain uber.com --wordlist data/wordlist.txt --subdomains data/subdomains.txt --max-buckets 10000 --batch-size 1000 --verbose --log-level DEBUG

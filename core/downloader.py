@@ -25,13 +25,17 @@ async def download_file(bucket: str, filename: str, analyzer: 'Analyzer', region
             async with session.get(url, timeout=settings.SETTINGS['request_timeout']) as response:
                 if response.status == 200:
                     content_type = response.headers.get('Content-Type', '')
+                    content_length = int(response.headers.get('Content-Length', 0))
                     max_size_bytes = settings.SETTINGS['max_file_size_mb'] * 1024 * 1024
+                    if content_length > max_size_bytes:
+                        logger.warning(f"Archivo {url} excede el tamaño máximo ({settings.SETTINGS['max_file_size_mb']} MB)")
+                        return None, None
                     downloaded_bytes = 0
                     with open(local_path, 'wb' if 'text' not in content_type else 'w', encoding='utf-8' if 'text' in content_type else None) as f:
                         async for chunk in response.content.iter_chunked(1024 * 1024):
                             downloaded_bytes += len(chunk)
                             if downloaded_bytes > max_size_bytes:
-                                logger.warning(f"Archivo {url} excede el tamaño máximo ({settings.SETTINGS['max_file_size_mb']} MB)")
+                                logger.warning(f"Archivo {url} excede el tamaño máximo durante la descarga")
                                 return None, None
                             f.write(chunk.decode('utf-8', errors='ignore') if 'text' in content_type else chunk)
                     content_risk = analyzer.analyze_content(local_path)

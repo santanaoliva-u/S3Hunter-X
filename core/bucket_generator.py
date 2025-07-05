@@ -39,6 +39,19 @@ def load_wordlist(file_path: str) -> List[str]:
         logger.error(f"Error al leer el archivo de palabras: {e}")
         return []
 
+def load_permutations(file_path: str, domain: str) -> List[str]:
+    """Carga patrones de permutaciones y los aplica al dominio."""
+    permutations = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                pattern = line.strip()
+                if pattern:
+                    permutations.append(pattern.replace('%s', domain))
+    except FileNotFoundError:
+        logger.warning(f"Archivo de permutaciones {file_path} no encontrado")
+    return permutations
+
 def generate_fuzzed_names(base_name: str, max_fuzz: int = 100) -> List[str]:
     """Genera variaciones fuzzed de un nombre base."""
     fuzzed = [base_name]
@@ -54,7 +67,8 @@ def generate_fuzzed_names(base_name: str, max_fuzz: int = 100) -> List[str]:
         fuzzed.append(f"{var}-{base_name}")
     return fuzzed
 
-def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdomains_file: str = None, max_buckets: int = None) -> List[str]:
+def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdomains_file: str = None, 
+                         permutations_file: str = None, max_buckets: int = None, exhaustive: bool = False) -> List[str]:
     """Genera nombres de buckets con fuzzing avanzado."""
     prefixes = [
         'dev', 'prod', 'staging', 'backup', 'data', 'files', 'public', 'logs', 'test', 'api',
@@ -70,8 +84,8 @@ def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdoma
     
     if wordlist_file:
         extra_words = load_wordlist(wordlist_file)
-        prefixes.extend(extra_words[:100])  # Aumentar para más combinaciones
-        suffixes.extend(extra_words[:100])
+        prefixes.extend(extra_words[:200 if exhaustive else 100])
+        suffixes.extend(extra_words[:200 if exhaustive else 100])
     
     subdomains = resolve_subdomains(target_domain)
     if subdomains_file and os.path.exists(subdomains_file):
@@ -91,21 +105,28 @@ def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdoma
             f"{domain_clean}-backup",
             f"{domain_clean}-prod",
             f"{domain_clean}-dev",
-            f"{domain_clean}-test"
+            f"{domain_clean}-test",
+            f"www-{domain_clean}",
+            f"{domain_clean}-www"
         ]
         buckets.update(high_priority)
-        for prefix in prefixes:
+        prefix_limit = len(prefixes) if exhaustive else min(len(prefixes), 50)
+        suffix_limit = len(suffixes) if exhaustive else min(len(suffixes), 50)
+        for prefix in prefixes[:prefix_limit]:
             buckets.add(f"{prefix}-{domain_clean}")
-        for suffix in suffixes:
+        for suffix in suffixes[:suffix_limit]:
             buckets.add(f"{domain_clean}-{suffix}")
-        for prefix, suffix in itertools.product(prefixes, suffixes):
+        for prefix, suffix in itertools.product(prefixes[:prefix_limit], suffixes[:suffix_limit]):
             buckets.add(f"{prefix}-{domain_clean}-{suffix}")
         for base_name in high_priority:
-            buckets.update(generate_fuzzed_names(base_name, max_fuzz=100))
+            buckets.update(generate_fuzzed_names(base_name, max_fuzz=200 if exhaustive else 100))
+        
+        if permutations_file:
+            buckets.update(load_permutations(permutations_file, domain_clean))
     
     valid_buckets = [b for b in buckets if is_valid_s3_bucket_name(b)]
     if max_buckets:
-        valid_buckets = sorted(valid_buckets, key=lambda x: any(kw in x for kw in ['prod', 'backup', 'data', 'public', 's3', 'dev', 'test']), reverse=True)[:max_buckets]
+        valid_buckets = sorted(valid_buckets, key=lambda x: any(kw in x for kw in ['prod', 'backup', 'data', 'public', 's3', 'dev', 'test', 'www']), reverse=True)[:max_buckets]
     
     logger.info(f"Generados {len(valid_buckets)} nombres de buckets para {target_domain}")
     return valid_buckets
@@ -120,13 +141,15 @@ def is_valid_s3_bucket_name(bucket: str) -> bool:
         return False
     return True
 
-def generate_buckets_file(target_domain: str, output_file: str = 'data/buckets.txt', max_buckets: int = None, wordlist_file: str = None, subdomains_file: str = None) -> bool:
+def generate_buckets_file(target_domain: str, output_file: str = 'data/buckets.txt', max_buckets: int = None, 
+                         wordlist_file: str = None, subdomains_file: str = None, permutations_file: str = None, 
+                         exhaustive: bool = False) -> bool:
     """Genera un archivo buckets.txt con nombres de buckets."""
     if not target_domain:
         logger.error("Se requiere un dominio objetivo para generar buckets")
         return False
     
-    buckets = generate_bucket_names(target_domain, wordlist_file, subdomains_file, max_buckets)
+    buckets = generate_bucket_names(target_domain, wordlist_file, subdomains_file, permutations_file, max_buckets, exhaustive)
     authorized_domains = settings.SETTINGS.get('authorized_domains', [])
     if authorized_domains:
         authorized_domains_clean = [domain.replace('.', '-').lower() for domain in authorized_domains]

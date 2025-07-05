@@ -17,6 +17,8 @@ from core.utils import load_module, is_authorized_domain
 from core.analyzer import Analyzer
 from core.downloader import send_telegram_notification
 from core.logger import setup_logger
+from core.aws_utils import check_bucket_access
+from core.web_crawler import spider_cloud_resources
 
 def parse_args() -> argparse.Namespace:
     """Parsea los argumentos de la línea de comandos."""
@@ -25,6 +27,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--buckets-file', type=str, default='data/buckets.txt', help='Archivo con lista de buckets')
     parser.add_argument('--wordlist', type=str, default=None, help='Archivo de wordlist para fuzzing')
     parser.add_argument('--subdomains', type=str, default=None, help='Archivo con subdominios')
+    parser.add_argument('--permutations', type=str, default=None, help='Archivo con patrones de permutaciones')
+    parser.add_argument('--crawl-url', type=str, default=None, help='URL para rastrear en busca de buckets S3')
+    parser.add_argument('--exhaustive', action='store_true', help='Modo exhaustivo para generar más buckets')
     parser.add_argument('--max-buckets', type=int, default=10000, help='Máximo número de buckets a generar')
     parser.add_argument('--batch-size', type=int, default=1000, help='Tamaño del lote para escaneo')
     parser.add_argument('--delay', type=float, default=1.0, help='Retraso entre lotes (segundos)')
@@ -35,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO', help='Nivel de logging')
     parser.add_argument('--telegram-token', type=str, default=os.getenv('TELEGRAM_TOKEN'), help='Token de Telegram')
     parser.add_argument('--telegram-chat-id', type=str, default=os.getenv('TELEGRAM_CHAT_ID'), help='Chat ID de Telegram')
+    parser.add_argument('--aws-access-key', type=str, default=os.getenv('AWS_ACCESS_KEY'), help='Clave de acceso AWS')
+    parser.add_argument('--aws-secret-key', type=str, default=os.getenv('AWS_SECRET_KEY'), help='Clave secreta AWS')
     parser.add_argument('--purge-db', action='store_true', help='Purgar la base de datos antes de iniciar')
     parser.add_argument('--verbose', action='store_true', help='Mostrar información detallada')
     
@@ -79,6 +86,8 @@ def init_db(db_path: str) -> None:
                 bucket TEXT PRIMARY KEY,
                 status TEXT,
                 region TEXT,
+                owner TEXT,
+                acls TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )''')
             c.execute('CREATE INDEX IF NOT EXISTS idx_bucket ON results (bucket)')
@@ -132,15 +141,18 @@ async def main() -> None:
         else:
             telegram_enabled = True
             logger.info("Configuración de Telegram validada")
-            # Enviar notificación de prueba
             logger.debug("Enviando notificación de prueba a Telegram")
-            await send_telegram_notification(
-                "🚀 S3Hunter-X iniciado para el dominio: " + args.target_domain,
+            success = await send_telegram_notification(
+                f"🚀 S3Hunter-X iniciado para el dominio: {args.target_domain}",
                 args.telegram_token,
                 args.telegram_chat_id
             )
-    else:
-        logger.info("Notificaciones de Telegram no configuradas")
+            if not success:
+                logger.warning("Fallo al enviar notificación de prueba a Telegram. Verifica el token y chat ID.")
+    
+    aws_enabled = bool(args.aws_access_key and args.aws_secret_key)
+    if aws_enabled:
+        logger.info("Credenciales AWS proporcionadas. Activando verificación de ACLs.")
     
     settings.SETTINGS.update({
         'buckets_file': args.buckets_file,
@@ -148,8 +160,10 @@ async def main() -> None:
         'max_file_size_mb': args.max_file_size,
         'telegram_token': args.telegram_token if telegram_enabled else '',
         'telegram_chat_id': args.telegram_chat_id if telegram_enabled else '',
+        'aws_access_key': args.aws_access_key if aws_enabled else '',
+        'aws_secret_key': args.aws_secret_key if aws_enabled else '',
         'request_timeout': 10,
-        's3_regions': ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-southeast-1']
+        's3_regions': ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-southeast-1', 'ap-northeast-1', 'sa-east-1']
     })
     
     session = None
@@ -171,12 +185,15 @@ async def main() -> None:
             sys.exit(1)
         
         buckets_list: List[str] = []
+        # Generar buckets
         success = bucket_generator.generate_buckets_file(
             target_domain=args.target_domain,
             output_file=args.buckets_file,
             max_buckets=args.max_buckets,
             wordlist_file=args.wordlist,
-            subdomains_file=args.subdomains
+            subdomains_file=args.subdomains,
+            permutations_file=args.permutations,
+            exhaustive=args.exhaustive
         )
         if not success:
             logger.error("No se pudo generar buckets.txt")
@@ -187,6 +204,18 @@ async def main() -> None:
         if not buckets_list:
             logger.error(f"El archivo {args.buckets_file} está vacío")
             sys.exit(1)
+        
+        # Rastreo web para descubrir buckets adicionales
+        if args.crawl_url:
+            logger.info(f"Rastreando {args.crawl_url} en busca de buckets S3")
+            cloud_urls = await spider_cloud_resources(args.crawl_url, depth=5, workers=args.max_workers)
+            for url in cloud_urls:
+                if url.endswith('.s3.amazonaws.com'):
+                    bucket_name = url.split('.')[0].replace('https://', '')
+                    if is_authorized_domain(bucket_name, [args.target_domain] + settings.SETTINGS['authorized_domains']):
+                        buckets_list.append(bucket_name)
+            buckets_list = list(set(buckets_list))
+            logger.info(f"Encontrados {len(cloud_urls)} URLs de nube, {len(buckets_list)} buckets totales tras rastreo")
         
         buckets_list = [b for b in buckets_list if is_authorized_domain(b, [args.target_domain] + settings.SETTINGS['authorized_domains'])]
         if not buckets_list:
@@ -204,15 +233,32 @@ async def main() -> None:
                 batch = buckets_list[i:i + args.batch_size]
                 logger.info(f"Escaneando lote {i+1} a {min(i+args.batch_size, len(buckets_list))} de {len(buckets_list)}")
                 
-                results = await scanner.scan_buckets_async(batch, args.max_workers, session)
+                # Corregido: Usar bucket_generator.load_wordlist si --wordlist está definido
+                if args.wordlist:
+                    grep_list = bucket_generator.load_wordlist(args.wordlist)[:100]
+                else:
+                    grep_list = []
+                
+                # Llamada a scan_buckets_async con grep_list
+                results = await scanner.scan_buckets_async(batch, args.max_workers, session, grep_list=grep_list)
+                
                 c = db_conn.cursor()
                 public_buckets_found = 0
                 for bucket, data in results:
                     if data and data['status'] == 'PUBLIC':
                         public_buckets_found += 1
+                        # Verificar ACLs con AWS SDK si están habilitadas
+                        acls = None
+                        owner = None
+                        if aws_enabled:
+                            aws_result = check_bucket_access(f"{bucket}.s3.amazonaws.com", 
+                                                            {'access_key': args.aws_access_key, 'secret_key': args.aws_secret_key})
+                            acls = aws_result.get('acls', 'unknown')
+                            owner = aws_result.get('owner', 'unknown')
+                        
                         c.execute(
-                            "INSERT OR REPLACE INTO scanned_buckets (bucket, status, region, timestamp) VALUES (?, ?, ?, ?)",
-                            (bucket, data['status'], data.get('region', 'unknown'), datetime.now())
+                            "INSERT OR REPLACE INTO scanned_buckets (bucket, status, region, owner, acls, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                            (bucket, data['status'], data.get('region', 'unknown'), owner, str(acls), datetime.now())
                         )
                         if 'data' in data and data['data']:
                             files = data['data'].get('Contents', [])
@@ -266,14 +312,20 @@ async def main() -> None:
             
             if args.verbose:
                 c = db_conn.cursor()
-                c.execute("SELECT bucket, status, region, timestamp FROM scanned_buckets")
-                table = [[r[0], r[1], r[2], r[3]] for r in c.fetchall()]
+                c.execute("SELECT bucket, status, region, owner, acls, timestamp FROM scanned_buckets")
+                table = [[r[0], r[1], r[2], r[3] or 'N/A', r[4] or 'N/A', r[5]] for r in c.fetchall()]
                 print("\nResumen de buckets escaneados:")
-                print(tabulate(table, headers=["Bucket", "Estado", "Región", "Timestamp"], tablefmt="grid"))
+                print(tabulate(table, headers=["Bucket", "Estado", "Región", "Propietario", "ACLs", "Timestamp"], tablefmt="grid"))
             
             logger.info(f"¡Proceso completado! Revisa los reportes en {args.output}.*")
             if public_buckets_found == 0:
-                logger.warning("No se encontraron buckets públicos. Considera usar un dominio diferente o aumentar el número de buckets generados.")
+                if telegram_enabled:
+                    await send_telegram_notification(
+                        f"⚠️ S3Hunter-X no encontró buckets públicos para {args.target_domain}. Considera usar --exhaustive o un dominio diferente.",
+                        args.telegram_token,
+                        args.telegram_chat_id
+                    )
+                logger.warning("No se encontraron buckets públicos. Considera usar --exhaustive o un dominio diferente.")
         
         except asyncio.CancelledError:
             logger.info("Tareas canceladas debido a interrupción")
