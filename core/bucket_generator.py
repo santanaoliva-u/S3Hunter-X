@@ -22,8 +22,9 @@ def resolve_subdomains(domain: str) -> List[str]:
             target = rdata.target.to_text().rstrip('.')
             if target.endswith('.s3.amazonaws.com') or any(target.endswith(f'.s3.{region}.amazonaws.com') for region in settings.SETTINGS['s3_regions']):
                 subdomains.append(domain.replace('.', '-').lower())
+        logger.debug(f"CNAMEs encontrados para {domain}: {[rdata.target.to_text() for rdata in answers]}")
     except Exception as e:
-        logger.warning(f"No se encontraron CNAMEs válidos para {domain}: {e}")
+        logger.debug(f"No se encontraron CNAMEs válidos para {domain}: {e}")
     return list(set(subdomains))
 
 def load_wordlist(file_path: str) -> List[str]:
@@ -66,8 +67,8 @@ def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdoma
     
     if wordlist_file:
         extra_words = load_wordlist(wordlist_file)
-        prefixes.extend(extra_words[:100])
-        suffixes.extend(extra_words[:100])
+        prefixes.extend(extra_words[:50])  # Limitar para mejorar rendimiento
+        suffixes.extend(extra_words[:50])
     
     subdomains = resolve_subdomains(target_domain)
     if subdomains_file and os.path.exists(subdomains_file):
@@ -77,23 +78,26 @@ def generate_bucket_names(target_domain: str, wordlist_file: str = None, subdoma
     
     buckets: Set[str] = set()
     for domain_clean in subdomains:
-        buckets.update(f"{prefix}-{domain_clean}" for prefix in prefixes)
-        buckets.update(f"{domain_clean}-{suffix}" for suffix in suffixes)
-        buckets.update([
+        high_priority = [
             f"{domain_clean}",
             f"s3-{domain_clean}",
             f"{domain_clean}-s3",
             f"{domain_clean}-public",
             f"{domain_clean}-private"
-        ])
-        for prefix, suffix in itertools.product(prefixes[:50], suffixes[:50]):
+        ]
+        buckets.update(high_priority)
+        for prefix in prefixes[:20]:  # Limitar para priorizar
+            buckets.add(f"{prefix}-{domain_clean}")
+        for suffix in suffixes[:20]:
+            buckets.add(f"{domain_clean}-{suffix}")
+        for prefix, suffix in itertools.product(prefixes[:20], suffixes[:20]):
             buckets.add(f"{prefix}-{domain_clean}-{suffix}")
-        for base_name in [f"{prefix}-{domain_clean}" for prefix in prefixes[:50]]:
-            buckets.update(generate_fuzzed_names(base_name, max_fuzz=50))
+        for base_name in high_priority:
+            buckets.update(generate_fuzzed_names(base_name, max_fuzz=20))  # Reducir fuzzing
     
     valid_buckets = [b for b in buckets if is_valid_s3_bucket_name(b)]
     if max_buckets:
-        valid_buckets = sorted(valid_buckets, key=lambda x: any(kw in x for kw in ['prod', 'backup', 'data', 'public']))[:max_buckets]
+        valid_buckets = sorted(valid_buckets, key=lambda x: any(kw in x for kw in ['prod', 'backup', 'data', 'public', 's3']), reverse=True)[:max_buckets]
     
     logger.info(f"Generados {len(valid_buckets)} nombres de buckets para {target_domain}")
     return valid_buckets

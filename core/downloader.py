@@ -38,7 +38,7 @@ async def download_file(bucket: str, filename: str, analyzer: 'Analyzer', region
                     logger.info(f"Archivo descargado: {local_path}, Riesgo: {content_risk}")
                     return local_path, content_risk
                 else:
-                    logger.error(f"Error al descargar {url}: Status {response.status}")
+                    logger.debug(f"Error al descargar {url}: Status {response.status}")
                     return None, None
     except Exception as e:
         logger.error(f"Error al descargar {url}: {e}")
@@ -50,8 +50,11 @@ async def send_telegram_notification(message: str, token: str, chat_id: str) -> 
     if not token or not chat_id:
         logger.error("Falta telegram_token o telegram_chat_id")
         return False
-    if not re.match(r'^bot\d+:[A-Za-z0-9_-]+$', token):
-        logger.error("Formato de telegram_token inválido")
+    if not re.match(r'^\d+:[A-Za-z0-9_-]+$', token):
+        logger.error(f"Formato de telegram_token inválido: {token}")
+        return False
+    if not re.match(r'^-?\d+$', chat_id):
+        logger.error(f"Formato de telegram_chat_id inválido: {chat_id}")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
@@ -69,7 +72,8 @@ async def send_telegram_notification(message: str, token: str, chat_id: str) -> 
                     logger.warning("Límite de tasa de Telegram alcanzado, esperando...")
                     raise aiohttp.ClientError("Rate limit")
                 else:
-                    logger.error(f"Error al enviar notificación de Telegram: Status {response.status}")
+                    response_text = await response.text()
+                    logger.error(f"Error al enviar notificación de Telegram: Status {response.status}, Respuesta: {response_text}")
                     return False
     except Exception as e:
         logger.error(f"Error al enviar notificación de Telegram: {e}")

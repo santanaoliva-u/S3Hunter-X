@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 def init_db(db_path: str) -> None:
-    """Inicializa la base de datos con índices optimizados."""
+    """Inicializa la base de datos con índices optimizados y verifica la columna 'url'."""
     try:
         with sqlite3.connect(db_path, check_same_thread=False) as conn:
             c = conn.cursor()
@@ -67,6 +67,11 @@ def init_db(db_path: str) -> None:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(bucket, filename)
             )''')
+            c.execute("PRAGMA table_info(results)")
+            columns = [col[1] for col in c.fetchall()]
+            if 'url' not in columns:
+                c.execute("ALTER TABLE results ADD COLUMN url TEXT")
+                logging.getLogger('S3Hunter-X').info("Columna 'url' añadida a la tabla 'results'")
             c.execute('''CREATE TABLE IF NOT EXISTS scanned_buckets (
                 bucket TEXT PRIMARY KEY,
                 status TEXT,
@@ -115,12 +120,25 @@ async def main() -> None:
     args = parse_args()
     logger = setup_logger(log_level=args.log_level)
     
+    # Validar configuración de Telegram (opcional)
+    telegram_enabled = False
+    if args.telegram_token and args.telegram_chat_id:
+        if not re.match(r'^\d+:[A-Za-z0-9_-]+$', args.telegram_token):
+            logger.warning(f"Formato de telegram_token inválido: {args.telegram_token}. Notificaciones de Telegram deshabilitadas")
+        elif not re.match(r'^-?\d+$', args.telegram_chat_id):
+            logger.warning(f"Formato de telegram_chat_id inválido: {args.telegram_chat_id}. Notificaciones de Telegram deshabilitadas")
+        else:
+            telegram_enabled = True
+            logger.info("Configuración de Telegram validada")
+    else:
+        logger.info("Notificaciones de Telegram no configuradas")
+    
     settings.SETTINGS.update({
         'buckets_file': args.buckets_file,
         'max_workers': min(args.max_workers, 100),
         'max_file_size_mb': args.max_file_size,
-        'telegram_token': args.telegram_token,
-        'telegram_chat_id': args.telegram_chat_id,
+        'telegram_token': args.telegram_token if telegram_enabled else '',
+        'telegram_chat_id': args.telegram_chat_id if telegram_enabled else '',
         'request_timeout': 10,
         's3_regions': ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-southeast-1']
     })
@@ -182,8 +200,10 @@ async def main() -> None:
                 
                 results = await scanner.scan_buckets_async(batch, args.max_workers, session)
                 c = db_conn.cursor()
+                public_buckets_found = 0
                 for bucket, data in results:
                     if data and data['status'] == 'PUBLIC':
+                        public_buckets_found += 1
                         c.execute(
                             "INSERT OR REPLACE INTO scanned_buckets (bucket, status, region, timestamp) VALUES (?, ?, ?, ?)",
                             (bucket, data['status'], data.get('region', 'unknown'), datetime.now())
@@ -204,7 +224,8 @@ async def main() -> None:
                                 results_data
                             )
                             for file in analyzed_files:
-                                if file['risk'] == 'HIGH' and args.telegram_token and args.telegram_chat_id:
+                                if file['risk'] == 'HIGH' and telegram_enabled:
+                                    logger.debug(f"Intentando descargar archivo {file['filename']} de bucket {bucket} para análisis")
                                     local_path, content_risk = await downloader.download_file(
                                         file['bucket'], file['filename'], analyzer, data.get('region', 'us-east-1')
                                     )
@@ -213,29 +234,39 @@ async def main() -> None:
                                             "UPDATE results SET content_risk = ? WHERE bucket = ? AND filename = ?",
                                             (content_risk, file['bucket'], file['filename'])
                                         )
+                                        logger.debug(f"Enviando notificación de Telegram para {bucket}/{file['filename']}")
                                         await send_telegram_notification(
                                             f"🚨 Bucket público de alto riesgo encontrado: https://{bucket}.s3.{data.get('region', 'us-east-1')}.amazonaws.com/{file['filename']} (Riesgo: {content_risk})",
                                             args.telegram_token,
                                             args.telegram_chat_id
                                         )
                         db_conn.commit()
-                    
-                    reporter.generate_report(formats=args.report_formats, output_prefix=f"{args.output}_batch_{i//args.batch_size+1}")
-                    if i + args.batch_size < len(buckets_list):
-                        logger.info(f"Esperando {args.delay} segundos antes del siguiente lote...")
-                        await asyncio.sleep(args.delay)
-            
-                # Generar reporte final
-                reporter.generate_report(formats=args.report_formats, output_prefix=args.output)
-                if args.verbose:
-                    c = db_conn.cursor()
-                    c.execute("SELECT bucket, status, region, timestamp FROM scanned_buckets")
-                    table = [[r[0], r[1], r[2], r[3]] for r in c.fetchall()]
-                    print("\nResumen de buckets escaneados:")
-                    print(tabulate(table, headers=["Bucket", "Estado", "Región", "Timestamp"], tablefmt="grid"))
+                    logger.debug(f"Procesado bucket {bucket}: {data.get('status', 'UNKNOWN')}")
+                logger.info(f"Lote {i//args.batch_size+1} completado. Buckets públicos encontrados: {public_buckets_found}")
                 
-                logger.info(f"¡Proceso completado! Revisa los reportes en {args.output}.*")
+                try:
+                    reporter.generate_report(formats=args.report_formats, output_prefix=f"{args.output}_batch_{i//args.batch_size+1}")
+                except Exception as e:
+                    logger.error(f"Fallo al generar reporte para lote {i//args.batch_size+1}: {e}")
+                
+                if i + args.batch_size < len(buckets_list):
+                    logger.info(f"Esperando {args.delay} segundos antes del siguiente lote...")
+                    await asyncio.sleep(args.delay)
             
+            try:
+                reporter.generate_report(formats=args.report_formats, output_prefix=args.output)
+            except Exception as e:
+                logger.error(f"Fallo al generar reporte final: {e}")
+            
+            if args.verbose:
+                c = db_conn.cursor()
+                c.execute("SELECT bucket, status, region, timestamp FROM scanned_buckets")
+                table = [[r[0], r[1], r[2], r[3]] for r in c.fetchall()]
+                print("\nResumen de buckets escaneados:")
+                print(tabulate(table, headers=["Bucket", "Estado", "Región", "Timestamp"], tablefmt="grid"))
+            
+            logger.info(f"¡Proceso completado! Revisa los reportes en {args.output}.*")
+        
         except asyncio.CancelledError:
             logger.info("Tareas canceladas debido a interrupción")
             raise
