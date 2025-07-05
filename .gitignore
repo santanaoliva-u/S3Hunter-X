@@ -60,3 +60,8 @@ Thumbs.db
 # ─────────────────────────────
 *.swp
 *.swo
+
+# Resultados y logs\*
+results*
+*.log
+nohup.out
